@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package kv;
+
+option go_package = "kvstore/proto";
+
+// KVNode is implemented by every storage node in the cluster.
+service KVNode {
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Replicate is called node-to-node so a write lands on every replica
+  // for a shard, not just the primary that the client talked to.
+  rpc Replicate(ReplicateRequest) returns (ReplicateResponse);
+
+  // Health is polled by the coordinator to track cluster membership.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message PutRequest {
+  string key = 1;
+  bytes value = 2;
+}
+
+message PutResponse {
+  bool ok = 1;
+  string error = 2;
+}
+
+message GetRequest {
+  string key = 1;
+}
+
+message GetResponse {
+  bool found = 1;
+  bytes value = 2;
+  string error = 3;
+}
+
+message DeleteRequest {
+  string key = 1;
+}
+
+message DeleteResponse {
+  bool ok = 1;
+  string error = 2;
+}
+
+message ReplicateRequest {
+  string key = 1;
+  bytes value = 2;
+  bool tombstone = 3; // true when this replicates a delete
+  int64 version = 4;  // logical clock, used to resolve write conflicts
+}
+
+message ReplicateResponse {
+  bool ok = 1;
+}
+
+message HealthRequest {
+  // Older grpc-go/protobuf runtimes (as shipped by some distro packages)
+  // mishandle a truly empty message on the wire, so we keep one field.
+  int64 requested_at = 1;
+}
+
+message HealthResponse {
+  bool alive = 1;
+  int32 key_count = 2;
+  int64 uptime_seconds = 3;
+}

@@ -1,0 +1,10 @@
+FROM golang:1.22-bookworm AS build
+WORKDIR /src
+COPY go.mod ./
+COPY . .
+RUN go build -o /out/coordinator ./cmd/coordinator
+
+FROM gcr.io/distroless/base-debian12
+COPY --from=build /out/coordinator /coordinator
+EXPOSE 8080
+ENTRYPOINT ["/coordinator"]

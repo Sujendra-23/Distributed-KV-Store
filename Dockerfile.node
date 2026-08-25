@@ -1,0 +1,10 @@
+FROM golang:1.22-bookworm AS build
+WORKDIR /src
+COPY go.mod ./
+COPY . .
+RUN go build -o /out/node ./cmd/node
+
+FROM gcr.io/distroless/base-debian12
+COPY --from=build /out/node /node
+EXPOSE 7001
+ENTRYPOINT ["/node"]
