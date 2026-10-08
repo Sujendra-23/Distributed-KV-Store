@@ -1,0 +1,21 @@
+# Overlay: run the cluster with DynamoDB-backed storage nodes against
+# DynamoDB Local.   docker compose -f docker-compose.yml -f docker-compose.dynamodb.yml up --build
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports: ["8000:8000"]
+
+  node1: &ddb-node
+    environment: &ddb-env
+      KV_BACKEND: dynamodb
+      KV_DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      AWS_REGION: us-east-1
+      KV_DYNAMODB_TABLE: kvstore-node1
+    depends_on: [dynamodb-local]
+  node2:
+    <<: *ddb-node
+    environment: { <<: *ddb-env, KV_DYNAMODB_TABLE: kvstore-node2 }
+  node3:
+    <<: *ddb-node
+    environment: { <<: *ddb-env, KV_DYNAMODB_TABLE: kvstore-node3 }

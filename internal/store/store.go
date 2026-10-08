@@ -35,12 +35,19 @@ func (s *Store) Put(key string, value []byte) int64 {
 // Replicate RPC, but only if it's newer than what's already stored -
 // this is what makes last-writer-wins safe under concurrent writes.
 func (s *Store) ApplyReplicated(key string, value []byte, version int64, tombstone bool) {
+	s.ApplyReplicatedChecked(key, value, version, tombstone)
+}
+
+// ApplyReplicatedChecked is ApplyReplicated that also reports whether the
+// write was applied (false means it was stale and ignored).
+func (s *Store) ApplyReplicatedChecked(key string, value []byte, version int64, tombstone bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.data[key]; ok && existing.version >= version {
-		return // stale write, ignore
+		return false // stale write, ignore
 	}
 	s.data[key] = entry{value: value, version: version, tombstone: tombstone}
+	return true
 }
 
 func (s *Store) Get(key string) ([]byte, bool) {

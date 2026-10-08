@@ -91,6 +91,44 @@ use`, clear everything first:
 pkill -f "bin/node"; pkill -f "bin/coordinator"
 ```
 
+## DynamoDB storage backend (optional)
+
+Storage nodes default to the in-memory store. Passing `-backend=dynamodb`
+(or `KV_BACKEND=dynamodb`) makes a node persist to a DynamoDB table instead,
+using the AWS SDK for Go v2 (`internal/dynamostore`).
+
+- Item shape: `{key (S, partition key), value (B), version (N), tombstone (BOOL)}`.
+- **Last-writer-wins is enforced by DynamoDB conditional writes.** Every write
+  is a `PutItem` with `ConditionExpression: attribute_not_exists(#k) OR #v < :ver`
+  on the `version` attribute. A write whose version is not strictly newer gets
+  `ConditionalCheckFailedException`, which the store treats as "stale, ignored"
+  (the same contract as the in-memory `ApplyReplicated`). Locally originated
+  `Put`/`Delete` read the current version (strongly consistent read), attempt a
+  conditional write at `version+1`, and retry (max 10) if another writer won.
+- **Deletes stay tombstones** (version bumped, value dropped, row kept), so a
+  late stale replicated write cannot resurrect a deleted key.
+- Each node needs its **own table** (it owns one shard); default name is
+  `kvstore-<addr>`, override with `-ddb-table` / `KV_DYNAMODB_TABLE`. The table
+  is created on startup (on-demand billing) unless `-ddb-create-table=false`.
+
+| Flag | Env var | Default |
+| ---- | ------- | ------- |
+| `-backend` | `KV_BACKEND` | `memory` |
+| `-ddb-endpoint` | `KV_DYNAMODB_ENDPOINT` | empty = real AWS; set `http://localhost:8000` for DynamoDB Local |
+| `-ddb-region` | `AWS_REGION` | `us-east-1` when an endpoint override is set |
+| `-ddb-table` | `KV_DYNAMODB_TABLE` | `kvstore-<addr>` |
+
+Run it against DynamoDB Local:
+
+```bash
+docker run -d --rm --name ddb-local -p 8000:8000 amazon/dynamodb-local
+export KV_DYNAMODB_ENDPOINT=http://localhost:8000
+go test ./... -v                 # dynamostore integration tests run (and skip if the var is unset)
+./scripts/e2e-dynamodb.sh        # 3 nodes + coordinator on DynamoDB, restarts nodes, checks data survives
+```
+
+Or with Compose: `docker compose -f docker-compose.yml -f docker-compose.dynamodb.yml up --build`.
+
 ## HTTP API
 
 | Method | Path        | Body       | Response                                  |
@@ -140,6 +178,19 @@ replicated write is correctly rejected in favor of a newer one.
 
 ## What's verified vs. simplified
 
+**DynamoDB backend, verified against DynamoDB Local (Docker, `amazon/dynamodb-local`) only - never against real AWS:**
+5 integration tests pass (`internal/dynamostore`): version increments, a
+**stale replicated write is rejected** (lower and equal versions) and the newer
+value survives, delete leaves a tombstone row that blocks resurrection by an
+older write, `Count` excludes tombstones, and 8 concurrent `Put`s to one key get
+8 distinct versions (1..8, no lost update). `scripts/e2e-dynamodb.sh` passes: a
+3-node cluster + coordinator on DynamoDB Local round-trips put/get/delete and
+data and tombstones survive killing and restarting all node processes. The node
+image still builds (`docker build -f Dockerfile.node`). **Not run:**
+`docker-compose.dynamodb.yml`, real AWS (IAM, throttling, latency), LocalStack
+for this feature. `Count` (used by the health RPC) is a table `Scan`, so it is
+O(table size).
+
 **Verified by actually running it:** `go build ./...` succeeds, all 9 unit
 tests pass, and a live 3-node cluster round-trips `put`/`get`/`delete`
 (including tombstone deletes correctly 404ing) through both the CLI client
@@ -161,8 +212,9 @@ syntax, not run against a real Jenkins instance.
 **Known limitations** (by design, to keep this a readable reference rather
 than a production system):
 
-- **No persistence** — storage is in-memory only; a node restart loses its
-  shard. There's no WAL or snapshotting.
+- **Persistence is opt-in** — the default storage is in-memory only (a node
+  restart loses its shard, no WAL/snapshots); use the DynamoDB backend above
+  for durable storage.
 - **Single coordinator, no HA** — if the coordinator process dies, the
   cluster is unreachable until it's restarted. Every node could in principle
   be coordinator-capable, but isn't here.
